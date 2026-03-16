@@ -32,6 +32,7 @@ class ServiceGenerateExecuteMixin:
             precomputed_lm_hints_25Hz,
             non_cover_text_hidden_states,
             non_cover_text_attention_masks,
+            repaint_mask,
         ) = processed_data
         return {
             "keys": keys,
@@ -51,6 +52,7 @@ class ServiceGenerateExecuteMixin:
             "precomputed_lm_hints_25Hz": precomputed_lm_hints_25Hz,
             "non_cover_text_hidden_states": non_cover_text_hidden_states,
             "non_cover_text_attention_masks": non_cover_text_attention_masks,
+            "repaint_mask": repaint_mask,
         }
 
     def _resolve_service_seed_param(self, seed_list: Optional[List[int]]) -> Any:
@@ -73,8 +75,13 @@ class ServiceGenerateExecuteMixin:
         cfg_interval_end: float,
         shift: float,
         timesteps: Optional[List[float]],
+        repaint_crossfade_frames: int = 10,
+        repaint_injection_ratio: float = 0.5,
     ) -> Dict[str, Any]:
         """Build kwargs passed to model generation backends."""
+        repaint_mask = payload.get("repaint_mask")
+        clean_src_latents = payload.get("target_latents") if repaint_mask is not None else None
+
         kwargs = {
             "text_hidden_states": payload["text_hidden_states"],
             "text_attention_mask": payload["text_attention_mask"],
@@ -99,6 +106,10 @@ class ServiceGenerateExecuteMixin:
             "cfg_interval_start": cfg_interval_start,
             "cfg_interval_end": cfg_interval_end,
             "shift": shift,
+            "repaint_mask": repaint_mask,
+            "clean_src_latents": clean_src_latents,
+            "repaint_crossfade_frames": repaint_crossfade_frames,
+            "repaint_injection_ratio": repaint_injection_ratio,
         }
         if timesteps is not None:
             kwargs["timesteps"] = torch.tensor(timesteps, dtype=torch.float32, device=self.device)
@@ -166,6 +177,8 @@ class ServiceGenerateExecuteMixin:
                                 is_covers=non_is_covers,
                             )
 
+                        null_cond_emb = getattr(self.model, "null_condition_emb", None)
+
                         outputs = self._mlx_run_diffusion(
                             encoder_hidden_states=encoder_hidden_states,
                             encoder_attention_mask=encoder_attention_mask,
@@ -175,6 +188,11 @@ class ServiceGenerateExecuteMixin:
                             infer_method=infer_method,
                             shift=shift,
                             timesteps=generate_kwargs.get("timesteps"),
+                            infer_steps=generate_kwargs.get("infer_steps"),
+                            guidance_scale=generate_kwargs.get("diffusion_guidance_sale", 1.0),
+                            null_condition_emb=null_cond_emb,
+                            cfg_interval_start=generate_kwargs.get("cfg_interval_start", 0.0),
+                            cfg_interval_end=generate_kwargs.get("cfg_interval_end", 1.0),
                             audio_cover_strength=audio_cover_strength,
                             encoder_hidden_states_non_cover=enc_hs_nc,
                             encoder_attention_mask_non_cover=enc_am_nc,
