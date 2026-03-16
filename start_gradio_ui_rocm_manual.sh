@@ -192,7 +192,7 @@ _load_manual() {
 _load_manual
 
 # ==================== ROCm Configuration ====================
-# Force PyTorch LM backend (bypasses nano-vllm flash_attn dependency)
+# Force PyTorch LM backend (bypasses vllm engine flash_attn dependency)
 export ACESTEP_LM_BACKEND="pt"
 
 # RDNA3 GPU architecture override (RX 7900 XT/XTX, RX 7800 XT, etc.)
