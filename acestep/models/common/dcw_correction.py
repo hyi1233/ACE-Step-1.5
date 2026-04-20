@@ -117,7 +117,12 @@ def _dwt_pair(
     y: torch.Tensor,
     wavelet: str,
 ):
-    """Run DWT on both latents. Returns (xl, xh, yl, yh, iwt) or None on failure."""
+    """Run DWT on both latents. Returns (xl, xh, yl, yh, iwt, out_T) or None on failure.
+
+    ``out_T`` is the original time length of ``x`` — we slice the IDWT output
+    back to this length because pytorch_wavelets pads odd-length inputs up to
+    the next even value before running the filter bank.
+    """
     modules = _WAVELET_CACHE.get(x.device, x.dtype, wavelet)
     if modules is None:
         return None
@@ -126,7 +131,7 @@ def _dwt_pair(
     y_bct = _btc_to_bct(y.to(torch.float32))
     xl, xh = dwt(x_bct)
     yl, yh = dwt(y_bct)
-    return xl, xh, yl, yh, iwt
+    return xl, xh, yl, yh, iwt, x.shape[1]
 
 
 def dcw_low(x: torch.Tensor, y: torch.Tensor, scaler: float, wavelet: str = "haar") -> torch.Tensor:
@@ -148,10 +153,10 @@ def dcw_low(x: torch.Tensor, y: torch.Tensor, scaler: float, wavelet: str = "haa
     pair = _dwt_pair(x, y, wavelet)
     if pair is None:
         return x
-    xl, xh, yl, _yh, iwt = pair
+    xl, xh, yl, _yh, iwt, out_T = pair
     xl = xl + scaler * (xl - yl)
     x_new = iwt((xl, xh))
-    return _bct_to_btc(x_new).to(dtype=x.dtype)
+    return _bct_to_btc(x_new[:, :, :out_T]).to(dtype=x.dtype)
 
 
 def dcw_high(x: torch.Tensor, y: torch.Tensor, scaler: float, wavelet: str = "haar") -> torch.Tensor:
@@ -161,10 +166,10 @@ def dcw_high(x: torch.Tensor, y: torch.Tensor, scaler: float, wavelet: str = "ha
     pair = _dwt_pair(x, y, wavelet)
     if pair is None:
         return x
-    xl, xh, _yl, yh, iwt = pair
+    xl, xh, _yl, yh, iwt, out_T = pair
     xh_new = [xhi + scaler * (xhi - yhi) for xhi, yhi in zip(xh, yh)]
     x_new = iwt((xl, xh_new))
-    return _bct_to_btc(x_new).to(dtype=x.dtype)
+    return _bct_to_btc(x_new[:, :, :out_T]).to(dtype=x.dtype)
 
 
 def dcw_double(
@@ -180,13 +185,13 @@ def dcw_double(
     pair = _dwt_pair(x, y, wavelet)
     if pair is None:
         return x
-    xl, xh, yl, yh, iwt = pair
+    xl, xh, yl, yh, iwt, out_T = pair
     if low_scaler != 0.0:
         xl = xl + low_scaler * (xl - yl)
     if high_scaler != 0.0:
         xh = [xhi + high_scaler * (xhi - yhi) for xhi, yhi in zip(xh, yh)]
     x_new = iwt((xl, xh))
-    return _bct_to_btc(x_new).to(dtype=x.dtype)
+    return _bct_to_btc(x_new[:, :, :out_T]).to(dtype=x.dtype)
 
 
 class DCWCorrector:

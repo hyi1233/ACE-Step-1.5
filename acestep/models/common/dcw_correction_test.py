@@ -63,6 +63,22 @@ def test_dcw_low_roundtrip_identity_when_x_equals_y():
 
 
 @pytest.mark.skipif(not HAS_PW, reason="pytorch_wavelets not installed")
+@pytest.mark.parametrize("shape", [(2, 15, 64), (1, 63, 32), (3, 31, 8)])
+def test_dcw_low_preserves_odd_time_length(shape):
+    # Real audio latents can have odd T (e.g. 25 Hz * arbitrary duration).
+    # pytorch_wavelets pads to an even length internally; we must trim the
+    # IDWT output back so the caller always gets the input shape back.
+    x = torch.randn(*shape)
+    y = torch.randn(*shape)
+    out = dcw_correction.dcw_low(x, y, scaler=0.1, wavelet="haar")
+    assert out.shape == x.shape
+    out2 = dcw_correction.dcw_high(x, y, scaler=0.1, wavelet="haar")
+    assert out2.shape == x.shape
+    out3 = dcw_correction.dcw_double(x, y, 0.1, 0.1, wavelet="haar")
+    assert out3.shape == x.shape
+
+
+@pytest.mark.skipif(not HAS_PW, reason="pytorch_wavelets not installed")
 def test_dcw_high_only_affects_high_band():
     # With dcw_high, the low-frequency mean of x should be preserved.
     torch.manual_seed(7)
