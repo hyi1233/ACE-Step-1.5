@@ -216,6 +216,11 @@ class ServiceGenerateExecuteMixin:
                             sampler_mode=generate_kwargs.get("sampler_mode", "euler"),
                             velocity_norm_threshold=generate_kwargs.get("velocity_norm_threshold", 0.0),
                             velocity_ema_factor=generate_kwargs.get("velocity_ema_factor", 0.0),
+                            dcw_enabled=generate_kwargs.get("dcw_enabled", False),
+                            dcw_mode=generate_kwargs.get("dcw_mode", "low"),
+                            dcw_scaler=generate_kwargs.get("dcw_scaler", 0.1),
+                            dcw_high_scaler=generate_kwargs.get("dcw_high_scaler", 0.0),
+                            dcw_wavelet=generate_kwargs.get("dcw_wavelet", "haar"),
                         )
                         _tc = outputs.get("time_costs", {})
                         logger.info(

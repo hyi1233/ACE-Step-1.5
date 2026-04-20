@@ -154,6 +154,11 @@ def mlx_generate_diffusion(
     sampler_mode: str = "euler",
     velocity_norm_threshold: float = 0.0,
     velocity_ema_factor: float = 0.0,
+    dcw_enabled: bool = False,
+    dcw_mode: str = "low",
+    dcw_scaler: float = 0.1,
+    dcw_high_scaler: float = 0.0,
+    dcw_wavelet: str = "haar",
 ) -> Dict[str, object]:
     """Run the complete MLX diffusion loop with optional CFG guidance.
 
@@ -340,6 +345,19 @@ def mlx_generate_diffusion(
     diff_start = time.time()
     _switched_to_non_cover = False
 
+    # DCW — opt-in per-band wavelet-domain correction (CVPR 2026).
+    # See ``acestep.models.mlx.dcw_correction_mlx`` for the native Haar
+    # implementation.  The call short-circuits when disabled.
+    from acestep.models.mlx.dcw_correction_mlx import apply_mlx_dcw
+    dcw_active = dcw_enabled and (
+        dcw_scaler != 0.0 or (dcw_mode == "double" and dcw_high_scaler != 0.0)
+    )
+    if dcw_active:
+        logger.info(
+            "[MLX-DiT] DCW enabled (mode=%s, scaler=%.3f, high_scaler=%.3f, wavelet=%s).",
+            dcw_mode, dcw_scaler, dcw_high_scaler, dcw_wavelet,
+        )
+
     for step_idx in tqdm(range(num_steps), desc="MLX DiT diffusion", disable=disable_tqdm):
         current_t = t_schedule_list[step_idx]
 
@@ -361,6 +379,10 @@ def mlx_generate_diffusion(
 
         vt = _apply_cfg(vt, current_t)
         vt = _apply_stabilisation(vt, xt, prev_vt)
+
+        # Cache pre-step latent so DCW can reconstruct the predicted clean
+        # sample ``denoised = x_before - v * t`` after the sampler update.
+        xt_before_step = xt
 
         # Final step: compute x0
         if step_idx == num_steps - 1:
@@ -400,6 +422,20 @@ def mlx_generate_diffusion(
                 dt_arr = mx.full((bsz, 1, 1), dt)
                 xt = xt - vt * dt_arr
 
+            mx.eval(xt)
+
+        # DCW correction — push x_next's frequency bands away from the
+        # predicted clean sample.  Scaler decays with t_curr so this is
+        # identity at t=0 and strongest at t≈1.
+        if dcw_active:
+            t_unsq_d = mx.full((bsz, 1, 1), current_t)
+            denoised = xt_before_step - vt * t_unsq_d
+            xt = apply_mlx_dcw(
+                xt, denoised, t_curr=current_t,
+                enabled=True,
+                mode=dcw_mode, scaler=dcw_scaler,
+                high_scaler=dcw_high_scaler, wavelet=dcw_wavelet,
+            )
             mx.eval(xt)
 
         prev_vt = vt  # store for EMA
