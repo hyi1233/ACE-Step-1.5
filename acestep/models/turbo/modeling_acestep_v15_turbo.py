@@ -47,6 +47,11 @@ try:
 except ImportError:
     from configuration_acestep_v15 import AceStepConfig
 
+# DCW (Differential Correction in Wavelet domain) — CVPR 2026.
+# Opt-in sampler-side correction for SNR-t bias; see the `dcw_*` kwargs
+# on `generate_audio` and docs/en/DCW.md for details.
+from acestep.models.common.dcw_correction import DCWCorrector
+
 
 logger = logging.get_logger(__name__)
 
@@ -1854,6 +1859,11 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
         sampler_mode: str = "euler",
         velocity_norm_threshold: float = 0.0,
         velocity_ema_factor: float = 0.0,
+        dcw_enabled: bool = False,
+        dcw_mode: str = "low",
+        dcw_scaler: float = 0.1,
+        dcw_high_scaler: float = 0.0,
+        dcw_wavelet: str = "haar",
         **kwargs,
     ):
         # Valid shifts: only discrete values 1, 2, 3 are supported
@@ -2002,6 +2012,16 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
             logger.warning("Heun sampler is not compatible with SDE; falling back to Euler.")
             use_heun = False
 
+        # DCW — opt-in per-band wavelet-domain correction (CVPR 2026).
+        # No-op unless `dcw_enabled=True` and a non-zero scaler is configured.
+        dcw_corrector = DCWCorrector(
+            enabled=dcw_enabled,
+            mode=dcw_mode,
+            scaler=dcw_scaler,
+            high_scaler=dcw_high_scaler,
+            wavelet=dcw_wavelet,
+        )
+
         cover_steps = int(num_steps * audio_cover_strength)
         _switched_to_non_cover = False
         for step_idx in range(num_steps):
@@ -2042,9 +2062,17 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
             if use_ema and prev_vt is not None:
                 vt = (1.0 - velocity_ema_factor) * vt + velocity_ema_factor * prev_vt
 
+            # Cache pre-step latent so DCW can reconstruct the predicted
+            # clean sample `denoised = x - v * t` after the sampler update.
+            xt_before_step = xt
+
             # On final step, directly compute x0 from noise
             if step_idx == num_steps - 1:
                 xt = self.get_x0_from_noise(xt, vt, t_curr_tensor)
+                if dcw_corrector.is_active:
+                    t_unsq = current_timestep * torch.ones((bsz,), device=device, dtype=dtype).unsqueeze(-1).unsqueeze(-1)
+                    denoised = xt_before_step - vt * t_unsq
+                    xt = dcw_corrector.apply(xt, denoised, current_timestep)
                 prev_vt = vt
                 break
 
@@ -2096,6 +2124,13 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
                 dt_tensor = dt * torch.ones((bsz,), device=device, dtype=dtype).unsqueeze(-1).unsqueeze(-1)
                 xt = xt - vt * dt_tensor
                 t_after_step = next_timestep
+
+            # DCW correction — push x_next's frequency band(s) away from
+            # the predicted clean sample.  Scaler decays with t_curr.
+            if dcw_corrector.is_active:
+                t_unsq = current_timestep * torch.ones((bsz,), device=device, dtype=dtype).unsqueeze(-1).unsqueeze(-1)
+                denoised = xt_before_step - vt * t_unsq
+                xt = dcw_corrector.apply(xt, denoised, current_timestep)
 
             prev_vt = vt
 
